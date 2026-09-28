@@ -28,7 +28,15 @@ void neru_xkb_state_key(neru_xkb_state *state, uint16_t evdev_code, int is_press
 // Returns 0 on success, -1 on failure.
 int neru_xkb_state_key_get_name(neru_xkb_state *state, uint16_t evdev_code, char *buf, size_t buf_size);
 
-// Resolve a command using layout group 0 and the live modifier state, without
+// Select a reference by XKB group name (case-insensitive), or automatic when
+// empty. Unknown names return 0 and use automatic selection until available.
+// Call on the owning thread, like other state operations.
+int neru_xkb_state_set_layout(neru_xkb_state *state, const char *name);
+
+// Borrow a group name until keymap replacement/destruction; NULL past the end.
+const char *neru_xkb_state_layout_name(neru_xkb_state *state, uint32_t index);
+
+// Resolve a command using the reference layout and the live modifier state, without
 // changing the active layout. Same result and buffer contract as above.
 int neru_xkb_state_key_get_command_name(neru_xkb_state *state, uint16_t evdev_code, char *buf, size_t buf_size);
 

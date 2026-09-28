@@ -478,15 +478,15 @@ the X11 tap names the key from the state-resolved **keysym** rather than the
 string `XLookupString` returns, so all backends call `Shift+;` the same thing
 and XKB options like `ctrl:swapcaps` reach Neru's own bindings. **On a
 non-QWERTY layout this decides which physical key a `[hotkeys]` chord answers**:
-the one bearing that character on the first configured XKB layout on Wayland
-(evdev) by default, regardless of the active language. This also applies to mode commands,
+the one bearing that character on the automatically selected or explicitly
+configured reference XKB layout on Wayland (evdev). This also applies to mode commands,
 hints and grid labels. Shift, CapsLock, NumLock and AltGr still select levels
-within that first layout. Physical modifier identification uses the live layout,
+within that reference layout. Physical modifier identification uses the live layout,
 and ordinary input and passthrough retain the active language because the proxy
 forwards the original scan codes. X11 continues to use the active layout.
 The reference layout is configurable through `general.kb_layout_to_use` (see
-[General configuration](CONFIGURATION.md#general)); `current` restores the
-previous behavior. No layout names are hardcoded; existing configuration character restrictions
+[General configuration](CONFIGURATION.md#general)). No layout names are hardcoded;
+existing configuration character restrictions
 still apply. A keysym is named by the
 character it types when it types one, and by keysym name otherwise
 ([wayland_keymap.c](../internal/adapter/platform/linux/wayland_keymap.c)); the

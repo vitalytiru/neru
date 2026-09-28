@@ -92,11 +92,45 @@ int main(int argc, char **argv) {
 	expect_name(state, "KP7", "7", 1);
 	xkb_state_update_mask(state->state, 0, 0, 0, 0, 0, 1);
 	expect_name(state, "KP7", "Home", 1);
-	// A non-Latin first group is resolved too; config validation is separate.
+	// Startup with a non-Latin first group chooses the first suitable group.
 	load_keymap(state, "ru,us", ",");
+	xkb_state_update_mask(state->state, 0, 0, 0, 0, 0, 0);
+	expect_name(state, "AD01", "q", 1);
+	expect_name(state, "AD01", "й", 0);
+	// Other suitable groups becoming active must not change the reference.
+	load_keymap(state, "ru,us,us", ",,dvorak");
+	neru_keyboard_modifiers(&state->kr, NULL, 0, 0, 0, 0, 2);
+	neru_keyboard_modifiers(&state->kr, NULL, 0, 0, 0, 0, 0);
+	expect_name(state, "AD01", "q", 1);
+	// Reordering recalculates the first suitable group.
+	load_keymap(state, "us,us,ru", "dvorak,,");
+	expect_name(state, "AD01", "'", 1);
+	load_keymap(state, "ru,us,us", ",,dvorak");
+	neru_keyboard_modifiers(&state->kr, NULL, 0, 0, 0, 0, 1);
+	expect_name(state, "AD01", "q", 1);
+	neru_keyboard_modifiers(&state->kr, NULL, 0, 0, 0, 0, 0);
+	expect_name(state, "AD01", "q", 1);
+	// Explicit names bypass the heuristic, including non-Latin layouts.
+	assert(neru_xkb_state_set_layout(state, "rUsSiAn"));
 	xkb_state_update_mask(state->state, 0, 0, 0, 0, 0, 1);
 	expect_name(state, "AD01", "й", 1);
 	expect_name(state, "AD01", "q", 0);
+	assert(neru_xkb_state_set_layout(state, "English (Dvorak)"));
+	expect_name(state, "AD01", "'", 1);
+	// Re-resolve overrides by name after group reorder.
+	load_keymap(state, "us,ru,us", "dvorak,,");
+	xkb_state_update_mask(state->state, 0, 0, 0, 0, 0, 2);
+	expect_name(state, "AD01", "'", 1);
+	assert(neru_xkb_state_set_layout(state, ""));
+	expect_name(state, "AD01", "'", 1);
+	assert(!neru_xkb_state_set_layout(state, "missing layout"));
+	expect_name(state, "AD01", "'", 1);
+	assert(!neru_xkb_state_set_layout(state, "first"));
+	assert(!neru_xkb_state_set_layout(state, "current"));
+	assert(neru_xkb_state_set_layout(state, ""));
+	// No suitable group: keep the active layout instead of inventing US.
+	load_keymap(state, "ru", "");
+	expect_name(state, "AD01", "й", 1);
 	if (argc > 1) {
 		// Optional user layout, supplied via XKB_CONFIG_EXTRA_PATH.
 		load_keymap(state, argv[1], ",");
@@ -107,6 +141,6 @@ int main(int argc, char **argv) {
 		expect_name(state, "AB07", "F", 1);
 	}
 	neru_xkb_state_destroy(state);
-	puts("first XKB layout: all checks passed");
+	puts("reference XKB layout: all checks passed");
 	return 0;
 }

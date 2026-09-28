@@ -579,7 +579,7 @@ func X11InertWords(cfg *Config, written Written) parity.Declaration {
 	const layoutOption = "general.kb_layout_to_use"
 
 	layout := strings.TrimSpace(cfg.General.KBLayoutToUse)
-	if _, wrote := written.Options[layoutOption]; wrote && layout != "" && layout != "current" {
+	if _, wrote := written.Options[layoutOption]; wrote && layout != "" {
 		inert = append(inert, parity.Word{
 			Kind:      parity.KindOption,
 			Name:      layoutOption,

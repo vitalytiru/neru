@@ -94,8 +94,8 @@ func TestPlatformSupport_DeclaresTheOptionBehindAValue(t *testing.T) {
 	}
 }
 
-// Explicit reference layouts must be reported as inert on X11; selecting its
-// current layout or leaving automatic selection alone needs no warning.
+// Explicit reference layouts must be reported as inert on X11;
+// leaving automatic selection alone needs no warning.
 func TestX11InertWords_ReportsWrittenReferenceLayouts(t *testing.T) {
 	t.Parallel()
 
@@ -105,9 +105,9 @@ func TestX11InertWords_ReportsWrittenReferenceLayouts(t *testing.T) {
 		wrote  bool
 		want   bool
 	}{
-		{layout: "first", wrote: true, want: true},
-		{layout: "first", wrote: false},
-		{layout: "current", wrote: true},
+		{layout: "English (US)", wrote: true, want: true},
+		{layout: "English (US)", wrote: false},
+		{layout: "current", wrote: true, want: true},
 		{layout: "", wrote: true},
 		{layout: "com.apple.keylayout.US", wrote: true, want: true},
 	} {

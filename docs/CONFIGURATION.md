@@ -785,7 +785,7 @@ layout, shortcut passthrough, and the shell used by `exec` hotkeys.
 | Option                                 | Type   | Default       | Description                                                                                       |
 | -------------------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------------- |
 | `excluded_apps`                        | array  | `[]`          | Bundle IDs where Neru won't activate                                                              |
-| `kb_layout_to_use`                     | string | `""`          | macOS: InputSourceID bundle ID (auto if empty), e.g. `com.apple.keylayout.Colemak`. Linux Wayland evdev: `first` (also when empty) or `current`. X11 and Windows retain the current layout. |
+| `kb_layout_to_use`                     | string | `""`          | Automatic reference layout when empty. Override with a macOS InputSourceID, e.g. `com.apple.keylayout.Colemak`, or a Linux Wayland evdev XKB group name, e.g. `English (US)`. X11 and Windows retain the current layout. |
 | `hide_overlay_in_screen_share`         | bool   | `false`       | Hide overlay in screen sharing apps                                                               |
 | `passthrough_unbounded_keys`           | bool   | `false`       | Let unbound Cmd/Ctrl/Alt shortcuts pass through                                                   |
 | `should_exit_after_passthrough`        | bool   | `false`       | Exit mode after a passthrough shortcut                                                            |
@@ -793,14 +793,32 @@ layout, shortcut passthrough, and the shell used by `exec` hotkeys.
 | `exec_shell`                           | string | `"/bin/bash"` | Shell binary used for `exec` hotkey commands                                                      |
 | `exec_shell_args`                      | array  | `["-lc"]`     | Shell arguments; command string is appended last                                                  |
 
-On Linux Wayland with evdev capture, commands and hotkeys use the first
-configured XKB layout by default, even when another language is active.
-Set `general.kb_layout_to_use = "current"` to restore active-layout command
-translation, or `"first"` to select the first layout explicitly. This setting
-can be reloaded at runtime. It does not switch the desktop layout: ordinary
-typing and passthrough still use the current language. Shift and lock modifiers
-continue to select levels within the reference layout. Without evdev capture,
-the overlay's keyboard input retains its existing behavior.
+On Linux Wayland with evdev capture, automatic selection uses the first XKB
+group containing all lowercase `a`–`z` on its base level. Commands and hotkeys
+keep that reference when any other layout (including layouts producing non-Latin
+Unicode characters) is active. Selection is recalculated when the compositor
+replaces its keymap. If no group qualifies, translation falls back to the
+tracker's active group. This is a Linux heuristic, not the macOS system's
+ASCII-capability classification.
+
+The first suitable group is deliberately preferred over the last active one:
+evdev provides key events, while Wayland modifier/group notifications are
+focus-scoped. The capture's connection has no focused surface, so compositor
+shortcuts, IPC layout changes and per-window restoration cannot be tracked
+reliably. Choosing a stable reference avoids depending on that incomplete
+history. A named override also works without tracking the active group.
+
+Set `general.kb_layout_to_use = "English (US)"` to force a configured XKB group.
+Names match the keymap's full group names case-insensitively (the `name[GroupN]`
+entries in an exported XKB keymap), not short layout codes such as `us`.
+An unavailable name warns and falls back to automatic selection; startup
+validation waits until the capture's keymap arrives. The name is retried when
+the keymap changes. This setting can
+be reloaded at runtime. Ordinary typing and passthrough still use the current
+language. Shift, CapsLock, NumLock and AltGr select levels within the reference
+layout. Existing binding character restrictions still apply even when a
+non-Latin group is explicitly selected. Without evdev capture, the overlay's
+keyboard input retains its existing behavior.
 
 Find available `kb_layout_to_use` IDs on macOS:
 

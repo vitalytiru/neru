@@ -1,5 +1,5 @@
 // XKB translation for evdev key codes: mapping captured codes to command
-// names under the configured reference layout (the first layout by default).
+// names under the configured reference layout (automatically selected by default).
 //
 // These are methods on the capture rather than on a reader, because the answer
 // belongs to the devices and their keymap and not to whoever is reading them.
@@ -15,14 +15,18 @@
 package linux
 
 /*
+#include <stdlib.h>
 #include "../../platform/linux/evdev.h"
 #include "../../platform/linux/wayland_keymap.h"
 */
 import "C"
 
 import (
+	"strings"
 	"sync/atomic"
 	"unsafe"
+
+	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/adapter/platform"
 )
@@ -33,27 +37,56 @@ import (
 // from outside the proxy's reader goroutine.
 var evdevKeyboardLayout referenceKeyboardLayout
 
-const keyboardLayoutCurrent = "current"
-
 type referenceKeyboardLayout struct {
-	current atomic.Bool
+	name      atomic.Pointer[string]
+	available atomic.Pointer[[]string]
 }
 
-func (layout *referenceKeyboardLayout) set(id string) bool {
-	layout.current.Store(id == keyboardLayoutCurrent)
-
-	return id == "" || id == "first" || id == keyboardLayoutCurrent
-}
-
-// SetKeyboardLayout selects the first (default) or current XKB layout for
-// Wayland evdev commands. X11 keeps using the current layout. An unsupported
-// value reports failure and restores the backend's automatic fallback.
+// SetKeyboardLayout publishes configuration without touching the proxy's state.
+// Validation reads immutable metadata published by the capture; no compositor
+// roundtrip or reader acknowledgement can stall configuration reload.
 func (et *EventTap) SetKeyboardLayout(layoutID string) bool {
+	layoutID = strings.TrimSpace(layoutID)
 	if !platform.DetectLinuxBackend().IsWayland() {
-		return layoutID == "" || layoutID == keyboardLayoutCurrent
+		return layoutID == ""
 	}
-
 	return evdevKeyboardLayout.set(layoutID)
+}
+
+func (layout *referenceKeyboardLayout) set(layoutID string) bool {
+	layoutID, resolved := layout.resolve(layoutID)
+	layout.name.Store(&layoutID)
+	return resolved
+}
+
+func (layout *referenceKeyboardLayout) resolve(layoutID string) (string, bool) {
+	resolved := layoutID == ""
+	if available := layout.available.Load(); available != nil {
+		for _, name := range *available {
+			if strings.EqualFold(name, layoutID) {
+				layoutID = name
+				resolved = true
+				break
+			}
+		}
+	} else {
+		// Startup config precedes proxy warm-up. Accept the request now;
+		// the owning reader resolves it and warns once its keymap arrives.
+		resolved = true
+	}
+	return layoutID, resolved
+}
+
+func (capture *waylandEvdevCapture) publishKeyboardLayouts() {
+	var names []string
+	for index := C.uint32_t(0); ; index++ {
+		name := C.neru_xkb_state_layout_name((*C.neru_xkb_state)(capture.xkbState), index)
+		if name == nil {
+			break
+		}
+		names = append(names, C.GoString(name))
+	}
+	evdevKeyboardLayout.available.Store(&names)
 }
 
 // keyName resolves a scan code under the configured reference keyboard
@@ -63,7 +96,31 @@ func (et *EventTap) SetKeyboardLayout(layoutID string) bool {
 // The fallback is a real answer rather than a failure: it is the name the code
 // carries on a us layout, which is what the table holds.
 func (capture *waylandEvdevCapture) keyName(code uint16) string {
-	return capture.xkbKeyName(code, !evdevKeyboardLayout.current.Load())
+	capture.applyKeyboardLayout()
+	return capture.xkbKeyName(code, true)
+}
+
+func (capture *waylandEvdevCapture) applyKeyboardLayout() {
+	if capture != nil && capture.xkbState != nil {
+		if name := evdevKeyboardLayout.name.Load(); name != capture.appliedKeyboardLayout {
+			if name != nil {
+				canonical, _ := evdevKeyboardLayout.resolve(*name)
+				cname := C.CString(canonical)
+				resolved := C.neru_xkb_state_set_layout(
+					(*C.neru_xkb_state)(capture.xkbState),
+					cname,
+				) != 0
+				C.free(unsafe.Pointer(cname))
+				if !resolved && capture.logger != nil {
+					capture.logger.Warn(
+						"Configured keyboard layout was not found; using automatic fallback",
+						zap.String("layout_id", *name),
+					)
+				}
+			}
+			capture.appliedKeyboardLayout = name
+		}
+	}
 }
 
 func (capture *waylandEvdevCapture) xkbKeyName(code uint16, command bool) string {
@@ -167,6 +224,9 @@ func (capture *waylandEvdevCapture) pollKeymap() bool {
 	case 0:
 		return false
 	case 1:
+		capture.publishKeyboardLayouts()
+		capture.appliedKeyboardLayout = nil
+		capture.applyKeyboardLayout()
 		// The state under the keymap is fresh, so its lock modifiers are not:
 		// read them off the devices again.
 		capture.syncLeds()
@@ -191,6 +251,8 @@ func (capture *waylandEvdevCapture) refreshXkbState() {
 
 	xkb := C.neru_xkb_state_create()
 	capture.xkbState = unsafe.Pointer(xkb)
+	capture.appliedKeyboardLayout = nil
+	capture.publishKeyboardLayouts()
 
 	if xkb == nil {
 		if capture.logger != nil {
@@ -203,6 +265,7 @@ func (capture *waylandEvdevCapture) refreshXkbState() {
 		return
 	}
 
+	capture.applyKeyboardLayout()
 	capture.syncLeds()
 }
 

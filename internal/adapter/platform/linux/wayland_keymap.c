@@ -3,6 +3,7 @@
 #include <poll.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <wayland-client.h>
@@ -11,6 +12,9 @@
 struct keymap_ready {
 	struct xkb_state *state;
 	struct xkb_state *command_state;
+	xkb_layout_index_t automatic_layout;
+	xkb_layout_index_t forced_layout;
+	char *layout_name;
 	int ready;
 	// Set when a keymap arrived after the first one, so the reader that
 	// dispatches this display knows the state it resolves names against has
@@ -25,7 +29,39 @@ struct neru_xkb_state {
 	struct keymap_ready kr;  // listener data, alive for lifetime of this struct
 };
 
-// ── wl_keyboard listener (only .keymap is used) ─────────────────────────
+// XKB has no ASCII-capability metadata. Require all a-z on level zero;
+// letters available only through AltGr cannot name bare commands.
+static xkb_layout_index_t neru_first_latin_layout(struct xkb_keymap *keymap) {
+	xkb_layout_index_t count = xkb_keymap_num_layouts(keymap);
+	for (xkb_layout_index_t group = 0; group < count; group++) {
+		uint32_t letters = 0;
+		for (xkb_keycode_t key = xkb_keymap_min_keycode(keymap); key <= xkb_keymap_max_keycode(keymap); key++) {
+			const xkb_keysym_t *syms;
+			int n = xkb_keymap_key_get_syms_by_level(keymap, key, group, 0, &syms);
+			if (n != 1)
+				continue;  // Command lookup requires a single keysym too.
+			uint32_t ch = xkb_keysym_to_utf32(syms[0]);
+			if (ch >= 'a' && ch <= 'z')
+				letters |= (uint32_t)1 << (ch - 'a');
+		}
+		if (letters == (((uint32_t)1 << 26) - 1))
+			return group;
+	}
+	return XKB_LAYOUT_INVALID;
+}
+
+static xkb_layout_index_t neru_layout_by_name(struct xkb_keymap *keymap, const char *name) {
+	if (name && *name) {
+		for (xkb_layout_index_t group = 0; group < xkb_keymap_num_layouts(keymap); group++) {
+			const char *candidate = xkb_keymap_layout_get_name(keymap, group);
+			if (candidate && strcasecmp(candidate, name) == 0)
+				return group;
+		}
+	}
+	return XKB_LAYOUT_INVALID;
+}
+
+// ── wl_keyboard listener ───────────────────────────────────────────────
 
 static void neru_keyboard_keymap(
     void *data, struct wl_keyboard *wl_keyboard, uint32_t format, int32_t fd, uint32_t size) {
@@ -40,7 +76,6 @@ static void neru_keyboard_keymap(
 				if (keymap) {
 					struct xkb_state *fresh = xkb_state_new(keymap);
 					struct xkb_state *commands = xkb_state_new(keymap);
-					xkb_keymap_unref(keymap);
 					if (fresh && commands) {
 						// A later keymap replaces the first: the compositor
 						// changed its layout or options, and every name
@@ -52,10 +87,13 @@ static void neru_keyboard_keymap(
 						}
 						kr->state = fresh;
 						kr->command_state = commands;
+						kr->automatic_layout = neru_first_latin_layout(keymap);
+						kr->forced_layout = neru_layout_by_name(keymap, kr->layout_name);
 					} else {
 						xkb_state_unref(fresh);
 						xkb_state_unref(commands);
 					}
+					xkb_keymap_unref(keymap);
 				}
 				xkb_context_unref(ctx);
 			}
@@ -220,6 +258,7 @@ void neru_xkb_state_destroy(neru_xkb_state *state) {
 	if (!state)
 		return;
 
+	free(state->kr.layout_name);
 	xkb_state_unref(state->kr.command_state);
 	xkb_state_unref(state->kr.state);
 	if (state->wl_keyboard)
@@ -338,17 +377,45 @@ int neru_xkb_state_key_get_name(neru_xkb_state *state, uint16_t evdev_code, char
 	return neru_xkb_keysym_name(keysym, buf, buf_size);
 }
 
-// Resolve commands in the compositor's first layout with the live modifiers.
+// Configuration and lookup run on the state's owning reader only.
+const char *neru_xkb_state_layout_name(neru_xkb_state *state, uint32_t index) {
+	if (!state || !state->state)
+		return NULL;
+	struct xkb_keymap *keymap = xkb_state_get_keymap(state->state);
+	if (index >= xkb_keymap_num_layouts(keymap))
+		return NULL;
+	const char *name = xkb_keymap_layout_get_name(keymap, index);
+	return name ? name : "";
+}
+
+int neru_xkb_state_set_layout(neru_xkb_state *state, const char *name) {
+	if (!state || !state->state || !name)
+		return 0;
+	char *copy = strdup(name);
+	if (!copy)
+		return 0;
+	free(state->kr.layout_name);
+	state->kr.layout_name = copy;
+	state->kr.forced_layout = neru_layout_by_name(xkb_state_get_keymap(state->state), name);
+	return !*name || state->kr.forced_layout != XKB_LAYOUT_INVALID;
+}
+
+// Resolve commands in the selected reference layout with the live modifiers.
 // A separate state preserves held-key bookkeeping and the active layout used
 // to identify physical modifiers. Passthrough still emits raw evdev codes.
 int neru_xkb_state_key_get_command_name(neru_xkb_state *state, uint16_t evdev_code, char *buf, size_t buf_size) {
 	if (!state || !state->state || !state->kr.command_state || !buf || buf_size == 0)
 		return -1;
 
+	xkb_layout_index_t group = state->kr.forced_layout;
+	if (group == XKB_LAYOUT_INVALID)
+		group = state->kr.automatic_layout;
+	if (group == XKB_LAYOUT_INVALID)
+		group = xkb_state_serialize_layout(state->state, XKB_STATE_LAYOUT_EFFECTIVE);
 	xkb_state_update_mask(
 	    state->kr.command_state, xkb_state_serialize_mods(state->state, XKB_STATE_MODS_DEPRESSED),
 	    xkb_state_serialize_mods(state->state, XKB_STATE_MODS_LATCHED),
-	    xkb_state_serialize_mods(state->state, XKB_STATE_MODS_LOCKED), 0, 0, 0);
+	    xkb_state_serialize_mods(state->state, XKB_STATE_MODS_LOCKED), 0, 0, group);
 	xkb_keysym_t keysym = xkb_state_key_get_one_sym(state->kr.command_state, (xkb_keycode_t)evdev_code + 8);
 
 	return neru_xkb_keysym_name(keysym, buf, buf_size);

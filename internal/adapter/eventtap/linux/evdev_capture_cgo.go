@@ -44,7 +44,8 @@ type waylandEvdevCapture struct {
 
 	// xkbState holds a C xkb_state initialized from the compositor's keymap.
 	// Used to resolve evdev scan codes to key names that respect XKB options.
-	xkbState unsafe.Pointer // *C.neru_xkb_state
+	xkbState              unsafe.Pointer // *C.neru_xkb_state
+	appliedKeyboardLayout *string        // reader-owned configuration snapshot
 
 	// devices is what the capture knows about each tracked file beyond its
 	// path; guarded by deviceMu like files.

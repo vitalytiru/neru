@@ -7,29 +7,41 @@ import "testing"
 func TestReferenceKeyboardLayout_Set(t *testing.T) {
 	t.Parallel()
 
+	const (
+		english = "English (US)"
+		dvorak  = "English (Dvorak)"
+	)
+
 	var layout referenceKeyboardLayout
-	if layout.current.Load() {
-		t.Fatal("the default must use the first layout before configuration")
+	if !layout.set(english) {
+		t.Fatal("startup must accept a pending override before proxy warm-up")
+	}
+	// Retain requests made before a keymap arrives so the reader can apply them.
+	if got := *layout.name.Load(); got != english {
+		t.Fatalf("pending layout = %q", got)
 	}
 
+	names := []string{english, dvorak}
+	layout.available.Store(&names)
+
 	for _, test := range []struct {
-		id      string
-		wantOK  bool
-		current bool
+		id   string
+		want string
+		ok   bool
 	}{
-		{id: keyboardLayoutCurrent, wantOK: true, current: true},
-		{id: "first", wantOK: true},
-		{id: keyboardLayoutCurrent, wantOK: true, current: true},
-		{id: "", wantOK: true},
-		{id: keyboardLayoutCurrent, wantOK: true, current: true},
-		{id: "com.apple.keylayout.US"},
+		{"english (us)", english, true},
+		{dvorak, dvorak, true},
+		{"missing", "missing", false},
+		{"first", "first", false},
+		{"current", "current", false},
+		{"", "", true},
 	} {
-		if got := layout.set(test.id); got != test.wantOK {
-			t.Errorf("set(%q) = %v, want %v", test.id, got, test.wantOK)
+		if got := layout.set(test.id); got != test.ok {
+			t.Errorf("set(%q) = %v, want %v", test.id, got, test.ok)
 		}
 
-		if got := layout.current.Load(); got != test.current {
-			t.Errorf("set(%q): current = %v, want %v", test.id, got, test.current)
+		if got := *layout.name.Load(); got != test.want {
+			t.Errorf("set(%q): name = %q, want %q", test.id, got, test.want)
 		}
 	}
 }
